@@ -57,7 +57,9 @@ def main():
     # open the connection
     cnx = mysql.connector.connect(user=config.get("MYSQL", "db_user"),
                                   database=config.get("MYSQL", "db_name"),
-                                  password=config.get("MYSQL", "db_password"))
+                                  password=config.get("MYSQL", "db_password"),
+                                  host=config.get("MYSQL", "db_host"),
+                                  port=config.get("MYSQL", "db_port"))
     cursor = cnx.cursor()
     
     for t in tables:
@@ -104,7 +106,8 @@ def main():
             # create data in dynamodb.
             table = dynamodb.Table(t)
             print ("adding item to table: "+str(table))
-            table.put_item(Item=attrs)
+            with table.batch_writer() as batch:
+                batch.put_item(Item=attrs)
     # close the connection
     cnx.close()
     print '--end--'
