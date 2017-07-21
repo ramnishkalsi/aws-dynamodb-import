@@ -28,10 +28,18 @@ def list_existing_tables():
 
 
 # Create schema in dynamodb
-def create_schema(table_name, key_schema, attributes):
+def create_schema(table_name):
+    attribute_name = config.get("MYSQL", table_name)
+
+    ks = [{'AttributeName': attribute_name, 'KeyType': 'HASH'}]
+    attributes = [{'AttributeName': attribute_name, 'AttributeType': 'S'}]
     pt = {'ReadCapacityUnits': 1, 'WriteCapacityUnits': 1}
+
+    print "Attribute definitions: " + json.dumps(attributes)
+    print "Key schema: " + json.dumps(ks)
     try:
-        table = dynamodb_client.create_table(TableName=table_name, KeySchema=key_schema,
+        table = dynamodb_client.create_table(TableName=table_name,
+                                             KeySchema=ks,
                                              AttributeDefinitions=attributes,
                                              ProvisionedThroughput=pt)
 
@@ -44,47 +52,19 @@ def create_schema(table_name, key_schema, attributes):
         print "Unexpected error:", sys.exc_info()
 
 
-def push_state_date(connection):
-    table_name="state_view"
-    cursor = connection.cursor()
-    query = "SELECT * from "+table_name
-    cursor.execute(query)
-    hash_key = config.get("MYSQL", table_name)
+def build_state_info(cursor, state_id):
+    # print "building state info"
+    # State info
+    cursor.execute('Select info_head, info_desc from state_info where state_id=' + str(state_id))
+    rows_state_information = cursor.fetchall()
+    attributes_information = {}
+    for index3, row3 in enumerate(rows_state_information):
+        attr_name = row3[0]
+        attr_value = row3[1]
+        if attr_value:
+            attributes_information[attr_name] = attr_value
 
-    ks = [{'AttributeName': hash_key, 'KeyType': 'HASH'}]
-    attributes = [{'AttributeName': hash_key, 'AttributeType': 'S'}]
-
-    response = create_schema(table_name, ks, attributes)
-
-    columns = cursor.description
-    states = cursor.fetchall()
-    print '# rows=' + str(len(states))
-
-    for index, row in enumerate(states):
-        print 'processing row #' + str(index)
-        attrs = {}
-        for index, col in enumerate(columns):
-            attr_name = str(col)
-            attr_value = str(row[index])
-            if attr_value:
-                attrs[attr_name] = attr_value
-
-            if attr_name == hash_key:
-                # get state infos now
-                state_info = []
-
-
-        attrs_json = json.dumps(attrs)
-        print attrs
-        # create data in dynamodb.
-        table = dynamodb.Table(t)
-        print ("adding item to table: " + str(table))
-        with table.batch_writer() as batch:
-            batch.put_item(Item=attrs)
-
-
-
-
+    return attributes_information
 
 
 def main():
@@ -93,10 +73,6 @@ def main():
     tables_csv_list = config.get('MYSQL', 'tables');
     tables = tables_csv_list.strip().split(',')
 
-    # check in dynamodb which tables are there..
-    #current_tables = list_existing_tables();
-    #print("current schemas in dynamodb: " + str(current_tables))
-    
     # open the connection
     cnx = mysql.connector.connect(user=config.get("MYSQL", "db_user"),
                                   database=config.get("MYSQL", "db_name"),
@@ -107,50 +83,51 @@ def main():
     
     for t in tables:
 
-        print "processing table: " + t
+        # print "processing table: " + t
         array_attr_definitions = []
         query = ("SELECT * from " + t)
 
         # execute the query
         cursor.execute(query)
 
-        # build the attribute definitions based on the
-        # for col in cols:
-        #    attribute_definition = {'AttributeName': col, 'AttributeType': 'S'}
-        #    array_attr_definitions.append(attribute_definition)
+        # Call dynamodb to create the schema
 
-        # get attribute name for the table - this should be set up in the config
-        attribute_name=config.get("MYSQL", t)
-
-        ks = [{'AttributeName':attribute_name, 'KeyType':'HASH'}]
-        attributes = [{'AttributeName': attribute_name, 'AttributeType': 'S'}]
-
-        # call dynamodb to create the schema
-        response = create_schema(t, ks, attributes)
-
-        # print "Attribute definitions: " + json.dumps(array_attr_definitions)
-        # print "Key schema: " + json.dumps(ks)
+        response = create_schema(t)
 
         cols = [i[0] for i in cursor.description]
+
         # Start importing data into the table now.
         rows = cursor.fetchall()
-        print '# rows=' + str(len(rows))
 
-        for index,row in enumerate(rows):
-            print 'processing row #'+str(index)
-            attrs = {}
-            for index,col in enumerate(cols):
+        # print '# rows=' + str(len(rows))
+
+        for index1, row in enumerate(rows):
+            # print 'processing row #'+str(index1)
+            state_id = row[0]
+
+            # Core attributes
+            attributes = {}
+            for index2,col in enumerate(cols):
                 attr_name = str(col)
-                attr_value = str(row[index])
+                attr_value = str(row[index2])
                 if attr_value:
-                    attrs[attr_name] = attr_value
-            attrs_json = json.dumps(attrs)
-            print attrs
-            # create data in dynamodb.
+                    attributes[attr_name] = attr_value
+            attributes_json = json.dumps(attributes)
+
+            # state info
+            attributes["state_information"] = build_state_info(cursor, state_id)
+
+            attributes_json = json.dumps(attributes)
+            print attributes_json
+
+            # uncomment below when data is ready, create data in dynamodb.
             table = dynamodb.Table(t)
+
             print ("adding item to table: "+str(table))
+
             with table.batch_writer() as batch:
-                batch.put_item(Item=attrs)
+                batch.put_item(Item=attributes)
+
     # close the connection
     cnx.close()
     print '--end--'
